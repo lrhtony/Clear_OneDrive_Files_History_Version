@@ -3,6 +3,7 @@ import requests
 import yaml
 import time
 import json
+from multiprocessing import Pool
 from account import Account
 
 
@@ -13,6 +14,7 @@ class App:
             'graph_url': 'https://graph.microsoft.com/v1.0'
         }
         self.load_config()
+        self.s = requests.Session()
 
     def load_config(self):
         with open('config.yaml', 'r') as f:
@@ -35,15 +37,7 @@ class App:
     def generate_header(self):
         return {'Authorization': f'Bearer {self.config["access_token"]}'}
 
-    def get_drive(self):
-        self.check_token()
-        r = requests.get(f'{self.config["graph_url"]}/me/drive/root/children', headers=self.generate_header())
-        print(r.json())
-        with open('.response/me-drive-root-children.json', 'w') as f:
-            json.dump(r.json(), f, indent=4)
-
     def process_data(self, r, method):
-        print(r.json())
         values = r.json()['value']
         result = []
         if method == 'get_items':
@@ -51,6 +45,7 @@ class App:
                 result.append({
                     'id': value['id'],
                     'name': value['name'],
+                    'path': value['parentReference']['path'].replace('/drive/root:', '').replace(':', '/'),
                     'is_folder': 'folder' in value
                 })
         elif method == 'list_versions':
@@ -61,19 +56,19 @@ class App:
     def get_items_by_path(self, path: str) -> list:
         self.check_token()
         if path == '/':
-            r = requests.get(f'{self.config["graph_url"]}/me/drive/root/children', headers=self.generate_header())
+            r = self.s.get(f'{self.config["graph_url"]}/me/drive/root/children', headers=self.generate_header())
         else:
-            r = requests.get(f'{self.config["graph_url"]}/me/drive/root:/{path}:/children', headers=self.generate_header())
+            r = self.s.get(f'{self.config["graph_url"]}/me/drive/root:/{path}:/children', headers=self.generate_header())
         return self.process_data(r, 'get_items')
 
     def get_items_by_id(self, item_id: str) -> list:
         self.check_token()
-        r = requests.get(f'{self.config["graph_url"]}/me/drive/items/{item_id}/children', headers=self.generate_header())
+        r = self.s.get(f'{self.config["graph_url"]}/me/drive/items/{item_id}/children', headers=self.generate_header())
         return self.process_data(r, 'get_items')
 
     def list_versions(self, item_id: str) -> list:
         self.check_token()
-        r = requests.get(f'{self.config["graph_url"]}/me/drive/items/{item_id}/versions', headers=self.generate_header())
+        r = self.s.get(f'{self.config["graph_url"]}/me/drive/items/{item_id}/versions', headers=self.generate_header())
         return self.process_data(r, 'list_versions')
 
     def delete_old_versions(self, item_id: str, versions: list = None, keep: int = 1):
@@ -82,11 +77,25 @@ class App:
         self.check_token()
         versions.sort(reverse=True)
         for version in versions[keep:]:
-            r = requests.delete(f'{self.config["graph_url"]}/me/drive/items/{item_id}/versions/{version}',
-                                headers=self.generate_header())
+            r = self.s.delete(f'{self.config["graph_url"]}/me/drive/items/{item_id}/versions/{version}', headers=self.generate_header())
             print(r.status_code)
+
+    def delete_folder_old_versions(self, keep: int = 1, **kwargs):
+        if 'id' in kwargs:
+            items = self.get_items_by_id(kwargs['id'])
+        elif 'path' in kwargs:
+            items = self.get_items_by_path(kwargs['path'])
+        else:
+            raise KeyError('id or path is required')
+        for item in items:
+            if item['is_folder']:
+                print(f'Processing folder: {item["path"]}/{item["name"]}')
+                self.delete_folder_old_versions(id=item['id'], keep=keep)
+            else:
+                print(f'Processing file: {item["path"]}/{item["name"]}')
+                self.delete_old_versions(item['id'], keep=keep)
 
 
 if __name__ == '__main__':
     a = App()
-    print(a.delete_old_versions(''))
+    a.delete_folder_old_versions(path='/music')
