@@ -3,7 +3,6 @@ import requests
 import yaml
 import time
 import json
-from multiprocessing import Pool
 from account import Account
 
 
@@ -15,6 +14,7 @@ class App:
         }
         self.load_config()
         self.s = requests.Session()
+        self.result = []
 
     def load_config(self):
         with open('config.yaml', 'r') as f:
@@ -38,37 +38,47 @@ class App:
         return {'Authorization': f'Bearer {self.config["access_token"]}'}
 
     def process_data(self, r, method):
+        with open('.response/response.json', 'w') as f:
+            json.dump(r.json(), f, indent=2)
         values = r.json()['value']
-        result = []
-        if method == 'get_items':
+        if method != 'get_items_next':
+            self.result = []
+        if method == 'get_items' or method == 'get_items_next':
             for value in values:
-                result.append({
+                self.result.append({
                     'id': value['id'],
                     'name': value['name'],
                     'path': value['parentReference']['path'].replace('/drive/root:', '').replace(':', '/'),
                     'is_folder': 'folder' in value
                 })
+            if '@odata.nextLink' in r.json():
+                self.get_items_next(r.json()['@odata.nextLink'])
         elif method == 'list_versions':
             for value in values:
-                result.append(float(value['id']))
-        return result
+                self.result.append(float(value['id']))
+        return self.result
 
     def get_items_by_path(self, path: str) -> list:
         self.check_token()
         if path == '/':
-            r = self.s.get(f'{self.config["graph_url"]}/me/drive/root/children', headers=self.generate_header())
+            r = self.s.get(f'{self.config["graph_url"]}/me/drive/root/children', headers=self.generate_header(), timeout=10)
         else:
-            r = self.s.get(f'{self.config["graph_url"]}/me/drive/root:/{path}:/children', headers=self.generate_header())
+            r = self.s.get(f'{self.config["graph_url"]}/me/drive/root:/{path}:/children', headers=self.generate_header(), timeout=10)
         return self.process_data(r, 'get_items')
 
     def get_items_by_id(self, item_id: str) -> list:
         self.check_token()
-        r = self.s.get(f'{self.config["graph_url"]}/me/drive/items/{item_id}/children', headers=self.generate_header())
+        r = self.s.get(f'{self.config["graph_url"]}/me/drive/items/{item_id}/children', headers=self.generate_header(), timeout=10)
         return self.process_data(r, 'get_items')
+
+    def get_items_next(self, url: str):
+        self.check_token()
+        r = self.s.get(url, headers=self.generate_header())
+        self.process_data(r, 'get_items_next')
 
     def list_versions(self, item_id: str) -> list:
         self.check_token()
-        r = self.s.get(f'{self.config["graph_url"]}/me/drive/items/{item_id}/versions', headers=self.generate_header())
+        r = self.s.get(f'{self.config["graph_url"]}/me/drive/items/{item_id}/versions', headers=self.generate_header(), timeout=10)
         return self.process_data(r, 'list_versions')
 
     def delete_old_versions(self, item_id: str, versions: list = None, keep: int = 1):
@@ -77,7 +87,7 @@ class App:
         self.check_token()
         versions.sort(reverse=True)
         for version in versions[keep:]:
-            r = self.s.delete(f'{self.config["graph_url"]}/me/drive/items/{item_id}/versions/{version}', headers=self.generate_header())
+            r = self.s.delete(f'{self.config["graph_url"]}/me/drive/items/{item_id}/versions/{version}', headers=self.generate_header(), timeout=10)
             print(r.status_code)
 
     def delete_folder_old_versions(self, keep: int = 1, **kwargs):
