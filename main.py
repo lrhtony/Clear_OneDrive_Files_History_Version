@@ -105,6 +105,12 @@ class App:
                 print(f'Processing file: {item["path"]}/{item["name"]}')
                 self.delete_old_versions(item['id'], keep=keep)
 
+    def get_download_url_by_path(self, path: str):
+        self.check_token()
+        r = self.s.get(f'{self.config["graph_url"]}/me/drive/root:/{path}?select=id,@microsoft.graph.downloadUrl', headers=self.generate_header(), allow_redirects=False, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+
 
 if __name__ == '__main__':
     a = App()
